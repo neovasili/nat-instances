@@ -1,6 +1,12 @@
 {
   "name": "nat-instances",
   "version": "0.1.0",
+  "license": "MIT",
+  "author": {
+    "name": "Juan Manuel Ruiz Fernández",
+    "email": "code@juanmanuelruizfernandez.com",
+    "url": "https://linktr.ee/neovasili"
+  },
   "bin": {
     "nat-instances": "bin/nat-instances.js"
   },
