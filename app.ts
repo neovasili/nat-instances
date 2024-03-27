@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { VpcStack } from './src/stacks/Vpc';
+import { NatInstancesStack } from './src/stacks/NatInstances';
 
 const app = new cdk.App();
 
@@ -12,3 +13,9 @@ const vpcStack = new VpcStack(app, 'VpcStack', {
   stackName: 'VpcStack',
   env: { account, region },
 });
+
+const natInstancesStack = new NatInstancesStack(app, 'NatInstancesStack', {
+  stackName: 'NatInstancesStack',
+  env: { account, region },
+});
+natInstancesStack.addDependency(vpcStack);

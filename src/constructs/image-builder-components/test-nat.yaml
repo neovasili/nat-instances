@@ -1,0 +1,16 @@
+name: 'Test-NAT'
+description: 'Test NAT routing for the instance'
+schemaVersion: 1.0
+
+phases:
+  - name: test
+    steps:
+      - name: TestNat
+        action: ExecuteBash
+        timeoutSeconds: 30
+        onFailure: Abort
+        maxAttempts: 2
+        inputs:
+          commands:
+            - |
+{{TEST_NAT_SCRIPT}}

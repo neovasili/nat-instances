@@ -1,0 +1,16 @@
+name: 'Enble-NAT'
+description: 'Enables NAT routing for the instance'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: EnableNat
+        action: ExecuteBash
+        timeoutSeconds: 30
+        onFailure: Abort
+        maxAttempts: 2
+        inputs:
+          commands:
+            - |
+{{ENABLE_NAT_SCRIPT}}

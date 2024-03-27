@@ -1,0 +1,16 @@
+name: 'Harden-NAT'
+description: 'Hardening of NAT instance'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: HardenNat
+        action: ExecuteBash
+        timeoutSeconds: 30
+        onFailure: Abort
+        maxAttempts: 2
+        inputs:
+          commands:
+            - |
+{{HARDEN_NAT_SCRIPT}}
