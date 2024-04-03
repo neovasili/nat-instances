@@ -11,7 +11,7 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as sfnTasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
 
-import { StepFunctionsNatInstances } from '../constructs/StepFunctions';
+import { StepFunctionsTasks } from '../constructs/StepFunctionsTasks';
 import { NatInstancesPipeline } from '../constructs/NatInstancesPipeline';
 import { NUMBER_OF_AVAILABILITY_ZONES } from '../constants/Common';
 import { AzConfiguration } from '../model/Vpc';
@@ -88,7 +88,7 @@ class NatInstancesStack extends cdk.Stack {
     });
 
     // Create State Machines
-    const getLatestImageFunction = StepFunctionsNatInstances.getLatestImageFunction(this, 'GetLatestNATImage');
+    const getLatestImageFunction = StepFunctionsTasks.getLatestImageFunction(this, 'GetLatestNATImage');
     const failoverStateMachine = this.createFailoverStateMachine();
     const replaceInstancesStateMachine = this.createReplaceInstanceStateMachine(
       natInstancesSecurityGroup,
@@ -124,7 +124,7 @@ class NatInstancesStack extends cdk.Stack {
   ): void {
     /**
      * In order to trigger the Failover State Machine, we need to ensure that Lambda functions are able to reach
-     * the Step Functions endpoitn even when the internet connection is down
+     * the Step Functions endpoint even when the internet connection is down
      * */
     const statesVpcEndpoint = new ec2.InterfaceVpcEndpoint(this, 'ConnectivityCheckerGuardrail', {
       service: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS,
@@ -152,21 +152,21 @@ class NatInstancesStack extends cdk.Stack {
     });
     cdk.Tags.of(connectivityCheckerSecurityGroup).add('Name', 'ConnectivityCheckerSecurityGroup');
 
-    // Create a ConnectivityChecker Lambda function per AZ using the AZ configuration from VPC mappings
+    // Create a ConnectivityChecker Lambda function per AZ using the provided AZ configurations
     this.azConfigurations.map((azConfiguration:AzConfiguration) => {
-      const az = azConfiguration.availabilityZone;
+      const availabilityZone = azConfiguration.availabilityZone;
 
       // Manually create LogGroup to avoid CDK custom resources to put logs retention
-      new logs.LogGroup(this, `ConnectivityChecker-${az}-LogGroup`, {
-        logGroupName: `/aws/lambda/ConnectivityChecker-${az}`,
+      new logs.LogGroup(this, `ConnectivityChecker-${availabilityZone}-LogGroup`, {
+        logGroupName: `/aws/lambda/ConnectivityChecker-${availabilityZone}`,
         retention: logs.RetentionDays.ONE_WEEK,  // Low logs retention, since we are emitting metrics
         removalPolicy: cdk.RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       });
 
-      const connectivityChecker = new lambda.Function(this, `ConnectivityChecker-${az}`, {
-        functionName: `ConnectivityChecker-${az}`,
+      const connectivityChecker = new lambda.Function(this, `ConnectivityChecker-${availabilityZone}`, {
+        functionName: `ConnectivityChecker-${availabilityZone}`,
         /**
-         * Function code have been done as much simple as possible in order to avoid external dependencies and/or
+         * Function code have been done as simple as possible in order to avoid external dependencies and/or
          * the need of bundling more assets than the strictly necessary
          */
         code: lambda.Code.fromAsset('src/constructs/lambda/connectivity-checker'),
@@ -179,16 +179,17 @@ class NatInstancesStack extends cdk.Stack {
           REQUEST_TIMEOUT: String(8),
           UNHEALTHY_THRESHOLD: String(3),
           FAILOVER_STATE_MACHINE_ARN: failoverStateMachineArn,
-          AVAILABILITY_ZONE: az,
+          AVAILABILITY_ZONE: availabilityZone,
         },
         vpc,
         vpcSubnets: {
           // Use only "this AZ" private subnet
-          subnets: [ec2.Subnet.fromSubnetId(this, `${az}-subnet`, azConfiguration.privateSubnetId)],
+          subnets: [ec2.Subnet.fromSubnetId(this, `${availabilityZone}-subnet`, azConfiguration.privateSubnetId)],
         },
         securityGroups: [connectivityCheckerSecurityGroup],
         timeout: cdk.Duration.seconds(functionTimeoutInSeconds),
       });
+      // Add the function permissions to trigger the Failover State Machine
       connectivityChecker.addToRolePolicy(new iam.PolicyStatement({
         actions: ['states:StartExecution'],
         effect: iam.Effect.ALLOW,
@@ -211,10 +212,10 @@ class NatInstancesStack extends cdk.Stack {
    */
   private createFailoverStateMachine(): sfn.StateMachine {
     // Use Step Functions AWS SDK integrations to avoid having custom code
-    const replaceRouteTask = StepFunctionsNatInstances.getReplaceRouteWithNatGatewayTask(this, 'ReplaceRouteTask',
+    const replaceRouteTask = StepFunctionsTasks.getReplaceRouteWithNatGatewayTask(this, 'ReplaceRouteTask',
       this.azConfigurations);
     // Create a failed state for errors
-    const failed = this.createStateMachineFailState('Failover');
+    const failed = StepFunctionsTasks.createStateMachineFailState(this, 'Failover');
 
     // Pass AZ configurations as "hardcoded values" in a list
     const getAZConfigurations = new sfn.Pass(this, 'GetAZConfigurations', {
@@ -224,6 +225,7 @@ class NatInstancesStack extends cdk.Stack {
       }),
     });
 
+    // Let's put all togheter in a State Machine definition
     const stateMachineDefinition = sfn.DefinitionBody.fromChainable(
       // First, get AZ configurations
       getAZConfigurations
@@ -277,58 +279,47 @@ class NatInstancesStack extends cdk.Stack {
     failoverStateMachine: sfn.IStateMachine,
   ): sfn.StateMachine {
     const stateMachineName = 'NATInstanceReplaceInstance';
+    // This is done as a 'hardcoded' value to avoid circular dependencies
     const stateMachineArn = `arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:${stateMachineName}`;
-    // Use Step Functions AWS SDK integrations to avoid having custom code
-    const getStateMachineRunning = StepFunctionsNatInstances.getStateMachineRunning(this, 'GetStateMachineRunning', stateMachineArn);
-    const getNatInstances = StepFunctionsNatInstances.getNatInstancesTask(this, 'GetNatInstancesTask');
-    const getNatInstanceImage = StepFunctionsNatInstances.getNatInstancesImageTask(
+    /** 
+     * Let's create some of state machine tasks as separated elements in order to ease the readability
+     *
+     * Use Step Functions AWS SDK integrations to avoid having custom code whenever is possible
+     */
+    const getStateMachineRunningTask = StepFunctionsTasks.getStateMachineRunningTask(
+      this,
+      'GetStateMachineRunningTask',
+      stateMachineArn,
+    );
+    const getNatInstancesTask = StepFunctionsTasks.getNatInstancesTask(this, 'GetNatInstancesTask');
+    const getNatInstancesImageTask = StepFunctionsTasks.getNatInstancesImageTask(
       this,
       'GetNatInstanceImageTask',
       getLatestImageFunction,
     );
-    const runNatInstance = StepFunctionsNatInstances.getRunInstanceTask(
+    const runNatInstanceTask = StepFunctionsTasks.getRunInstanceTask(
       this,
       'RunNatInstanceTask',
       natInstancesSecurityGroup,
       ec2.InstanceType.of('c7gn' as ec2.InstanceClass, ec2.InstanceSize.MEDIUM).toString(),
     );
-    const getInstanceState = StepFunctionsNatInstances.getInstanceStateTask(this, 'GetInstanceStateTask');
-    const disableSourceDestCheck = StepFunctionsNatInstances.getDisableInstanceSourceDestCheckTask(
+    const getInstanceStateTask = StepFunctionsTasks.getInstanceStateTask(this, 'GetInstanceStateTask');
+    const disableSourceDestCheckTask = StepFunctionsTasks.getDisableInstanceSourceDestCheckTask(
       this,
       'DisableSourceDestCheckTask',
     );
-    const disableTerminationProtection = StepFunctionsNatInstances.getDisableInstanceTerminationProtectionTask(
+    const disableTerminationProtectionTask = StepFunctionsTasks.getDisableInstanceTerminationProtectionTask(
       this,
       'DisableTerminationProtectionTask',
     );
-    const terminateOldInstances = StepFunctionsNatInstances.getTerminateInstanceTask(this, 'TerminateOldInstanceTask');
+    const terminateOldInstancesTask = StepFunctionsTasks.getTerminateInstanceTask(this,
+        'TerminateOldInstanceTask');
 
     // Create a failed state for errors
-    const failed = this.createStateMachineFailState('ReplaceInstance');
-    const failedAlreadyRunning = this.createStateMachineFailState('AlreadyRunning');
+    const failed = StepFunctionsTasks.createStateMachineFailState(this, 'ReplaceInstance');
+    const failedAlreadyRunning = StepFunctionsTasks.createStateMachineFailState(this, 'AlreadyRunning');
 
     const noOpState = new sfn.Pass(this, 'NoOp');
-
-    // Terminate instances branch definition
-    const terminateOldInstancesBranch = new sfn.Choice(this, 'AnyInstance?', {
-      comment: 'Check if there is any instance already running',
-    })
-      .when(sfn.Condition.isPresent('$.NatInstances.Reservations[0]'),
-        new sfn.Map(this, 'DisableInstancesTerminationProtection', {
-          comment: 'Disable instances termination protection',
-          maxConcurrency: 6,
-          inputPath: '$',
-          itemsPath: '$.NatInstances.Reservations',
-        })
-          .itemProcessor(
-            disableTerminationProtection
-            .next(
-              terminateOldInstances
-            )
-          )
-      )
-      // All choices require a default state
-      .otherwise(noOpState);
 
     // This is required, otherwise, status is not properly fetched
     const waitForRun = new sfn.Wait(this, 'WaitForRun', {
@@ -338,7 +329,7 @@ class NatInstancesStack extends cdk.Stack {
     // This is the instance state check loop, part of the create new instances branch
     const waitRunningInstanceLoop = waitForRun
       .next(
-        getInstanceState
+        getInstanceStateTask
           .next(
             new sfn.Choice(this, 'IsInstanceReady?', {
               comment: 'Check if instance is ready',
@@ -359,9 +350,30 @@ class NatInstancesStack extends cdk.Stack {
                   ),
                   waitForRun,
               )
-              .otherwise(disableSourceDestCheck)
+              .otherwise(disableSourceDestCheckTask)
           )
       );
+
+    // Terminate instances branch definition
+    const terminateOldInstancesBranch = new sfn.Choice(this, 'AnyInstance?', {
+      comment: 'Check if there is any instance already running',
+    })
+      .when(sfn.Condition.isPresent('$.NatInstances.Reservations[0]'),
+        new sfn.Map(this, 'DisableInstancesTerminationProtection', {
+          comment: 'Disable instances termination protection',
+          maxConcurrency: 6,
+          inputPath: '$',
+          itemsPath: '$.NatInstances.Reservations',
+        })
+          .itemProcessor(
+            disableTerminationProtectionTask
+            .next(
+              terminateOldInstancesTask
+            )
+          )
+      )
+      // All choices require a default state
+      .otherwise(noOpState);
 
     // Create new instances branch definition
     const createNewInstancesBranch = new sfn.Pass(this, 'GetSubnets', {
@@ -378,9 +390,9 @@ class NatInstancesStack extends cdk.Stack {
           itemsPath: '$.azConfigurations',  // But items input is inside the 'associatedSubnetId' which is a list
         })
         .itemProcessor(
-              getNatInstanceImage
+          getNatInstancesImageTask
               .next(
-                runNatInstance
+                runNatInstanceTask
                   .next(
                     waitRunningInstanceLoop
                   )
@@ -390,7 +402,7 @@ class NatInstancesStack extends cdk.Stack {
 
     // The whole State Machine definition that wraps both branches adding the sanity checks at the beginning
     const stateMachineDefinition = sfn.DefinitionBody.fromChainable(
-      getStateMachineRunning
+      getStateMachineRunningTask
         .addCatch(failed)
         .next(
           new sfn.Choice(this, 'AlreadyRunningStateMachine?', {
@@ -408,7 +420,7 @@ class NatInstancesStack extends cdk.Stack {
               })
                 .addCatch(failed)
                 .next(
-                  getNatInstances
+                  getNatInstancesTask
                     .addCatch(failed)
                     .next(
                       new sfn.Parallel(this, 'InstancesReplacement', {
@@ -427,9 +439,7 @@ class NatInstancesStack extends cdk.Stack {
       stateMachineName,
       stateMachineType: sfn.StateMachineType.STANDARD,
       definitionBody: stateMachineDefinition,
-      /**
-       * Sanity timeout in case we enter an infinite loop, mean execution time during tests was ~3 minutes
-       */
+      // Sanity timeout in case we enter an infinite loop, mean execution time during tests was ~3 minutes
       timeout: cdk.Duration.minutes(5),
       logs: {
         level: sfn.LogLevel.ERROR,
@@ -450,15 +460,15 @@ class NatInstancesStack extends cdk.Stack {
    */
   private createFallbackStateMachine(): sfn.StateMachine {
     // Use Step Functions AWS SDK integrations to avoid having custom code
-    const getNatInstances = StepFunctionsNatInstances.getNatInstancesTask(this, 'GetRunningNatInstancesTask');
-    const replaceRoute = StepFunctionsNatInstances.getReplaceRouteWithNatInstanceTask(
+    const getNatInstances = StepFunctionsTasks.getNatInstancesTask(this, 'GetRunningNatInstancesTask');
+    const replaceRoute = StepFunctionsTasks.getReplaceRouteWithNatInstanceTask(
       this,
       'ReplaceInstanceRouteTask',
       this.azConfigurations,
     );
 
     // Create a failed state for errors
-    const failed = this.createStateMachineFailState('Fallback');
+    const failed = StepFunctionsTasks.createStateMachineFailState(this, 'Fallback');
 
     const stateMachineDefinition = sfn.DefinitionBody.fromChainable(
       // First get the existing running instances, if any
@@ -542,26 +552,30 @@ class NatInstancesStack extends cdk.Stack {
     const imageVersion = `${imageRecipe.name.toLocaleLowerCase()}/${imageRecipe.version}`;
     const imageVersionArn = `arn:aws:imagebuilder:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:image/${imageVersion}`;
     // Use Step Functions AWS SDK integrations to avoid having custom code
-    const triggerImagePipeline = StepFunctionsNatInstances.getTriggerImagesPipeline(this, 'TriggerImagePipeline', imagePipeline);
-    const imageInitialPipelineStatus = StepFunctionsNatInstances.getCheckImagesPipelineStatus(
+    const triggerImagePipelineTask = StepFunctionsTasks.getTriggerImagesPipelineTask(
       this,
-      'GetInitialImagePipelineStatus',
+      'TriggerImagePipelineTask',
+      imagePipeline,
+    );
+    const imageInitialPipelineStatusTask = StepFunctionsTasks.getCheckImagesPipelineStatusTask(
+      this,
+      'GetInitialImagePipelineStatusTask',
       imageVersionArn,
     );
-    const imagePipelineStatus = StepFunctionsNatInstances.getCheckImagesPipelineStatus(
+    const imagePipelineStatusTask = StepFunctionsTasks.getCheckImagesPipelineStatusTask(
       this,
-      'GetImagePipelineStatus',
+      'GetImagePipelineStatusTask',
       imageVersionArn,
     );
 
     // Create a failed states for errors
-    const failed = this.createStateMachineFailState('Generic');
-    const failedImagePipeline = this.createStateMachineFailState('ImagePipeline');
-    const failedAlreadyRunningPipeline = this.createStateMachineFailState('AlreadyRunningPipeline');
+    const failed = StepFunctionsTasks.createStateMachineFailState(this, 'Generic');
+    const failedImagePipeline = StepFunctionsTasks.createStateMachineFailState(this, 'ImagePipeline');
+    const failedAlreadyRunningPipeline = StepFunctionsTasks.createStateMachineFailState(this, 'AlreadyRunningPipeline');
 
     const stateMachineDefinition = sfn.DefinitionBody.fromChainable(
       // Get pipeline status
-      imageInitialPipelineStatus
+      imageInitialPipelineStatusTask
         .addCatch(failed)
         .next(
           new sfn.Choice(this, 'AlreadyRunning?', {
@@ -577,7 +591,7 @@ class NatInstancesStack extends cdk.Stack {
             )
             // If it's not running, then trigger it and wait for it to finish
             .otherwise(
-              triggerImagePipeline
+              triggerImagePipelineTask
                 .addCatch(failed)
                 .next(
                   new sfn.Wait(this, 'WaitForPipelineToRun', {
@@ -585,7 +599,7 @@ class NatInstancesStack extends cdk.Stack {
                     time: sfn.WaitTime.duration(cdk.Duration.minutes(10)),
                   })
                     .next(
-                      imagePipelineStatus
+                      imagePipelineStatusTask
                         .addCatch(failed)
                         .next(
                           new sfn.Choice(this, 'Finished?', {
@@ -599,7 +613,7 @@ class NatInstancesStack extends cdk.Stack {
                               comment: 'Wait a bit to fetch status again',
                               time: sfn.WaitTime.duration(cdk.Duration.minutes(2)),
                             })
-                              .next(imagePipelineStatus)
+                              .next(imagePipelineStatusTask)
                           )
                           // Once the pipeline finishes, we start to replace instances
                           .otherwise(
@@ -653,20 +667,6 @@ class NatInstancesStack extends cdk.Stack {
     });
 
     return maintenanceStateMachine;
-  }
-
-  /**
-   * Creates a generic fail state step for State Machines
-   *
-   * @param id ID of the fail state
-   * @returns State Machine fail state construct
-   */
-  private createStateMachineFailState(id: string): sfn.Fail {
-    return new sfn.Fail(this, `${id}FailState`, {
-      comment: 'Capture failure of any step',
-      error: sfn.JsonPath.stringAt('$.Error'),
-      cause: sfn.JsonPath.stringAt('$.Cause'),
-    });
   }
 }
 
