@@ -17,7 +17,7 @@ import {
 import { AzConfiguration } from '../model/Vpc';
 
 
-abstract class StepFunctionsNatInstances {
+abstract class StepFunctionsTasks {
   /**
    * Gets a Step Functions AWS API Call task that replaces private route table "internet route" with NAT Gateway ID
    *
@@ -78,7 +78,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that fetches all currently running NAT instances using multiple filters
    *
@@ -109,7 +109,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Lambda function to fetch the latest produced AMI for NAT instances
    *
@@ -146,7 +146,7 @@ abstract class StepFunctionsNatInstances {
     }));
     return getLatestImageFunction;
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that fetches the latest produced AMI for NAT instances using a Lambda
    *
@@ -170,7 +170,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that runs a NAT instance
    *
@@ -233,7 +233,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that gets a NAT instance status
    *
@@ -256,7 +256,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that disables source and destination check from a running instance
    *
@@ -280,7 +280,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that disables termination protection from a running instance
    *
@@ -306,7 +306,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that terminates a running instance
    *
@@ -336,7 +336,11 @@ abstract class StepFunctionsNatInstances {
    * @param stateMachineArn State Machine ARN to which fetch running executions
    * @returns CallAwsService Step Functions Task
    */
-  public static getStateMachineRunning(scope: Construct, id: string, stateMachineArn: string): sfnTasks.CallAwsService {
+  public static getStateMachineRunningTask(
+    scope: Construct,
+    id: string,
+    stateMachineArn: string,
+  ): sfnTasks.CallAwsService {
     return new sfnTasks.CallAwsService(scope, id, {
       comment: 'Get running executions for the specified state machine',
       service: AwsService.STEP_FUNCTIONS,
@@ -357,7 +361,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that triggers the Image Builder pipeline
    *
@@ -366,7 +370,7 @@ abstract class StepFunctionsNatInstances {
    * @param imagePipeline The Image Builder Pipeline construct, used to get its attributes as reference
    * @returns CallAwsService Step Functions Task
    */
-  public static getTriggerImagesPipeline(
+  public static getTriggerImagesPipelineTask(
     scope: Construct,
     id: string,
     imagePipeline: imagebuilder.CfnImagePipeline,
@@ -392,7 +396,7 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
-  
+
   /**
    * Gets a Step Functions AWS API Call task that gets the Image Builder pipeline status
    *
@@ -401,7 +405,7 @@ abstract class StepFunctionsNatInstances {
    * @param imageVersionArn ARN of the image version we want to fetch the status from
    * @returns CallAwsService Step Functions Task
    */
-  public static getCheckImagesPipelineStatus(
+  public static getCheckImagesPipelineStatusTask(
     scope: Construct,
     id: string,
     imageVersionArn: string,
@@ -429,8 +433,22 @@ abstract class StepFunctionsNatInstances {
       taskTimeout: DEFAULT_TASK_TIMEOUT,
     });
   }
+
+  /**
+   * Creates a generic fail state step for State Machines
+   *
+   * @param id ID of the fail state
+   * @returns State Machine fail state construct
+   */
+  public static createStateMachineFailState(scope: Construct, id: string): sfn.Fail {
+    return new sfn.Fail(scope, `${id}FailState`, {
+      comment: 'Capture failure of any step',
+      error: sfn.JsonPath.stringAt('$.Error'),
+      cause: sfn.JsonPath.stringAt('$.Cause'),
+    });
+  }
 }
 
 export {
-  StepFunctionsNatInstances,
+  StepFunctionsTasks,
 }
