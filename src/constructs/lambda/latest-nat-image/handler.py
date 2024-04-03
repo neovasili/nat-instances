@@ -33,23 +33,37 @@ def handler(event: dict, context: dict):
 
     aws_account_id = context.invoked_function_arn.split(":")[4]
 
+    existing_images = list()
+
+    filters = [
+        {
+            "Name": "name",
+            "Values": [NAT_IMAGES_AMI_NAME_TAG_PATTERN],
+        },
+        {
+            "Name": "tag:CreatedBy",
+            "Values": ["EC2 Image Builder"],
+        },
+    ]
+
     response = client.describe_images(
-        Filters=[
-            {
-                "Name": "name",
-                "Values": [NAT_IMAGES_AMI_NAME_TAG_PATTERN],
-            },
-            {
-                "Name": "tag:CreatedBy",
-                "Values": ["EC2 Image Builder"],
-            },
-        ],
+        Filters=filters,
         IncludeDeprecated=False,
         Owners=[aws_account_id],
     )
+    existing_images.extend(response["Images"])
+
+    while "NextToken" in response:
+        response = client.describe_images(
+            Filters=filters,
+            IncludeDeprecated=False,
+            Owners=[aws_account_id],
+            NextToken=response["NextToken"],
+        )
+        existing_images.extend(response["Images"])
 
     # Sort the returned list descending by CreationDate so the first element is the most recent one
-    images = sorted(response["Images"], key=lambda field: field["CreationDate"], reverse=True)
+    images = sorted(existing_images, key=lambda field: field["CreationDate"], reverse=True)
 
     latest_image_id = images[0]["ImageId"]
 
