@@ -19,7 +19,7 @@ This page contains details about how the NAT instances solution has been impleme
 
 ## Introduction
 
-The presented NAT instances solution is intended to replace the usage of NAT Gateways mainly because of their cost, since you are charged by not only the NAT Gateway uptime, but also for every byte processed by it, both ingress and egress traffic, which can become an issue, because you are charged twice for the egress traffic: once for the NAT Gateway concept and another for the general egress traffic concept, resulting in potential huge network billing amounts, specially for workloads that makes a lot of external requests.
+The presented NAT instances solution is intended to replace the usage of NAT Gateways mainly because of their cost, since you are charged by not only the NAT Gateway uptime, but also for every byte processed by it, both ingress and egress traffic, which can become an issue, because you are charged also for the ingress traffic, resulting in potential huge network billing amounts, specially for workloads that makes a lot of external requests.
 
 NAT instances will allow compute resources in private subnets to access the internet the same way that NAT Gateways do, but in this case we have to manage them, their whole lifecycle, thus, creation, update, replacement in case of failure and scale if required.
 
