@@ -167,7 +167,7 @@ Replacement or routes happen concurrently. It takes less than one second to be e
 #### Maintenance State Machine
 
 <p align="center">
-  <img alt="Fallback State Machine diagram" height="800px" src="docs/nat-instances-maintenance-state-machine.png">
+  <img alt="Fallback State Machine diagram" height="600px" src="docs/nat-instances-maintenance-state-machine.png">
 </p>
 
 This State Machine creates a new NAT instance image, waits for it to be ready and replaces the existing NAT instances with new ones with Zero Downtime.
